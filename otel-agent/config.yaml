@@ -1,0 +1,31 @@
+receivers:
+  hostmetrics:
+    collection_interval: 10s
+    scrapers:
+      cpu:
+      memory:
+      load:
+      filesystem:
+      network:
+      process:
+      paging:
+
+  # GPU metrics (NVIDIA)
+  nvml:
+    collection_interval: 10s
+
+processors:
+  batch:
+
+exporters:
+  otlp:
+    endpoint: "otel-gateway:4317"
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    metrics:
+      receivers: [hostmetrics, nvml]
+      processors: [batch]
+      exporters: [otlp]

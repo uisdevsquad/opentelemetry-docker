@@ -1,0 +1,28 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"
+      http:
+        endpoint: "0.0.0.0:4318"
+
+processors:
+  batch:
+
+exporters:
+  debug:
+    verbosity: detailed
+
+  clickhouse:
+    endpoint: "tcp://clickhouse-server:9000?username=default&password=password123&database=otel"
+    ttl: 72h
+    timeout: 5s
+    retry_on_failure:
+      enabled: true
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug, clickhouse]

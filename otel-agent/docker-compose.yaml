@@ -1,0 +1,24 @@
+services:
+  agent:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: otel-agent
+    command:
+      - "--config=/etc/otel/config.yaml"
+    volumes:
+      - ./config.yaml:/etc/otel/config.yaml
+    # Descomente abaixo para habilitar coleta de métricas GPU (NVIDIA)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    networks:
+      - otel-network
+    restart: always
+
+networks:
+  otel-network:
+    name: otel-network
+    external: true
