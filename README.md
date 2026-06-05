@@ -184,10 +184,17 @@ O DCGM Exporter já está definido no `docker-compose.yaml` do Agent com
 cd otel-agent && docker compose down && docker compose up -d
 ```
 
-## Parar tudo
+## Parar tudo (remove containers, volumes e rede)
 
 ```bash
-cd otel-agent    && docker compose down
-cd otel-gateway  && docker compose down
-cd clickhouse    && docker compose down
+# Para e remove containers + volumes
+cd otel-agent    && sudo docker compose down -v
+cd otel-gateway  && sudo docker compose down -v
+cd clickhouse    && sudo docker compose down -v
+
+# Remove a rede
+sudo docker network rm otel-network
+
+# Remove as imagens (opcional)
+sudo docker rmi $(sudo docker images --format '{{.Repository}}:{{.Tag}}' | grep -E 'clickhouse|otel/|grafana|dcgm-exporter' | sort -u)
 ```
