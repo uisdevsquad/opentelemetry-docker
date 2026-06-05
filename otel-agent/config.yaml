@@ -10,9 +10,14 @@ receivers:
       process:
       paging:
 
-  # GPU metrics (NVIDIA)
-  nvml:
-    collection_interval: 10s
+  # GPU metrics via DCGM Exporter (http://dcgm-exporter:9400/metrics)
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: "dcgm"
+          scrape_interval: 10s
+          static_configs:
+            - targets: ["dcgm-exporter:9400"]
 
 processors:
   batch:
@@ -26,6 +31,6 @@ exporters:
 service:
   pipelines:
     metrics:
-      receivers: [hostmetrics, nvml]
+      receivers: [hostmetrics, prometheus]
       processors: [batch]
       exporters: [otlp]

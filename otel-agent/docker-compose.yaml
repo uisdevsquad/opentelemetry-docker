@@ -6,14 +6,14 @@ services:
       - "--config=/etc/otel/config.yaml"
     volumes:
       - ./config.yaml:/etc/otel/config.yaml
-    # Descomente abaixo para habilitar coleta de métricas GPU (NVIDIA)
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
+    networks:
+      - otel-network
+    restart: always
+
+  dcgm-exporter:
+    image: nvidia/dcgm-exporter:latest
+    container_name: dcgm-exporter
+    runtime: nvidia
     networks:
       - otel-network
     restart: always

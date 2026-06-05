@@ -17,6 +17,17 @@ services:
       - otel-network
     restart: always
 
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - otel-network
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    restart: always
+
 networks:
   otel-network:
     name: otel-network

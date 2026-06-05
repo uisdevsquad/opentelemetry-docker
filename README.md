@@ -1,34 +1,25 @@
-# 🚀 POC OpenTelemetry Local (Opção 2 — Containers Independentes + ClickHouse)
+# POC OpenTelemetry Local (Containers Independentes + ClickHouse)
 
-Este guia descreve uma Prova de Conceito (POC) do OpenTelemetry usando **containers Docker totalmente independentes**, simulando o cenário real de múltiplas máquinas enviando dados para um Gateway central com persistência em um banco **ClickHouse**.
+Prova de conceito do OpenTelemetry usando containers Docker independentes,
+simulando múltiplas máquinas enviando dados para um Gateway central com
+persistência em ClickHouse.
 
----
+## Arquitetura
 
-# 🎯 Objetivo
-
-Validar uma arquitetura realista:
-
-* Um **OTel Gateway** rodando como "servidor central"
-* Um **OTel Agent** rodando como "máquina independente" (coletando métricas do host)
-* Comunicação via OTLP (gRPC) e persistência via Native TCP
-* Execução isolada em containers, simulando cenários reais de rede
-
----
-
-# 🏗️ Arquitetura
-
-```text
+```
 ┌──────────────────────────────┐
 │        OTel Agent            │
 │ (simula VPS / host local)    │
+│   CPU, RAM, Disk, Network    │
+│   GPU (NVIDIA, opcional)     │
 └──────────────┬───────────────┘
-               │ OTLP (gRPC - 4317)
+               │ OTLP gRPC (:4317)
                ▼
 ┌──────────────────────────────┐
 │       OTel Gateway           │
 │    (Processa e Envia)        │
 └──────────────┬───────────────┘
-               │ Native TCP (9000)
+               │ Native TCP (:9000)
                ▼
 ┌──────────────────────────────┐
 │        ClickHouse            │
@@ -36,329 +27,167 @@ Validar uma arquitetura realista:
 └──────────────────────────────┘
 ```
 
----
+Todos os containers compartilham a rede `otel-network` e se comunicam pelo
+nome do serviço (DNS interno do Docker).
 
-# 📁 Estrutura do Projeto
+## Pré-requisitos
 
-Crie três diretórios independentes na sua máquina:
+- Docker + Docker Compose
+- (Opcional) NVIDIA GPU + NVIDIA Container Toolkit para métricas de GPU
 
-```text
-clickhouse/
-└── docker-compose.yml
-
-otel-gateway/
-├── docker-compose.yml
-└── config.yaml
-
-otel-agent/
-├── docker-compose.yml
-└── config.yaml
-```
-
----
-
-# 🗄️ 1. ClickHouse (Banco de Dados)
-
-O banco de dados precisa ser o primeiro a subir para que o Gateway consiga estabelecer o canal de conexão.
-
-## 🐳 `clickhouse/docker-compose.yml`
-
-```yaml
-services:
-  clickhouse:
-    image: clickhouse/clickhouse-server:latest
-    container_name: clickhouse-server
-
-    ports:
-      - "8123:8123" # Interface HTTP
-      - "9000:9000" # Native TCP Client (Usado pelo OTel Gateway)
-
-    environment:
-      - CLICKHOUSE_DB=otel
-      - CLICKHOUSE_USER=default
-      - CLICKHOUSE_PASSWORD=password123
-
-    ulimits:
-      nofile:
-        soft: 262144
-        hard: 262144
-
-    restart: always
-```
-
-## 🚀 Subir o ClickHouse
-
-Dentro da pasta `clickhouse`:
+## Subir tudo
 
 ```bash
-docker compose up -d
+# 1. Criar rede compartilhada (uma vez apenas)
+docker network create otel-network
+
+# 2. Ordem obrigatória: ClickHouse -> Gateway -> Agent
+cd clickhouse    && docker compose up -d
+cd otel-gateway  && docker compose up -d
+cd otel-agent    && docker compose up -d
 ```
 
-Verifique:
+## O que cada serviço coleta
 
-```bash
-docker ps
-```
+### Agent (CPU + sistema)
 
----
+`hostmetrics` coleta do host:
 
-# 🧠 2. OTel Gateway (Servidor Central)
+| Métrica | Descrição |
+|---|---|
+| system.cpu.time | Tempo de CPU por core e estado |
+| system.cpu.load_average.1m/5m/15m | Load average |
+| system.memory.usage | Uso de memória RAM |
+| system.memory.utilization | Percentual de memória usada |
+| system.filesystem.usage | Uso de disco |
+| system.filesystem.utilization | Percentual de disco usado |
+| system.network.io | Tráfego de rede (bytes) |
+| system.network.packets | Pacotes de rede |
+| system.network.errors | Erros de rede |
+| system.network.dropped | Pacotes descartados |
+| system.disk.io | Operações de I/O de disco |
+| system.disk.operations | Operações de leitura/escrita |
+| system.process.count | Número de processos |
+| system.processes.created | Processos criados |
+| system.paging.usage | Uso de swap/paging |
 
-O Gateway precisa escutar o mundo externo em todas as interfaces (`0.0.0.0`) e utilizar o exportador oficial do ClickHouse.
+### GPU NVIDIA (via DCGM Exporter)
 
-## 📄 `otel-gateway/config.yaml`
+Scrape Prometheus no DCGM Exporter, já incluso no docker-compose.
 
-```yaml
-receivers:
-  otlp:
-    protocols:
-      grpc:
-        endpoint: "0.0.0.0:4317"
-      http:
-        endpoint: "0.0.0.0:4318"
+| Métrica | Significado | Unidade |
+|---|---|---|
+| DCGM_FI_DEV_GPU_UTIL | Utilização da GPU | % |
+| DCGM_FI_DEV_MEM_COPY_UTIL | Utilização de cópia de memória | % |
+| DCGM_FI_DEV_FB_USED | Memória de framebuffer usada | MiB |
+| DCGM_FI_DEV_FB_FREE | Memória de framebuffer livre | MiB |
+| DCGM_FI_DEV_GPU_TEMP | Temperatura da GPU | °C |
+| DCGM_FI_DEV_POWER_USAGE | Consumo de energia | W |
+| DCGM_FI_DEV_SM_CLOCK | Clock do Streaming Multiprocessor | MHz |
+| DCGM_FI_DEV_MEM_CLOCK | Clock da memória | MHz |
+| DCGM_FI_DEV_ENC_UTIL | Utilização do codificador de vídeo | % |
+| DCGM_FI_DEV_DEC_UTIL | Utilização do decodificador de vídeo | % |
+| DCGM_FI_DEV_XID_ERRORS | Erros XID (críticos) | erros |
+| DCGM_FI_DEV_VGPU_LICENSE_STATUS | Status de licença vGPU | status |
 
-processors:
-  batch:
+### Gateway
 
-exporters:
-  debug:
-    verbosity: detailed
+Recebe via OTLP, faz batch, envia para ClickHouse e loga no console (debug).
 
-  clickhouse:
-    endpoint: "tcp://host.docker.internal:9000?username=default&password=password123&database=otel"
-    ttl: 72h
-    timeout: 5s
+## Validar funcionamento
 
-    retry_on_failure:
-      enabled: true
-
-service:
-  pipelines:
-    metrics:
-      receivers: [otlp]
-      processors: [batch]
-      exporters: [debug, clickhouse]
-```
-
-## 🐳 `otel-gateway/docker-compose.yml`
-
-```yaml
-services:
-  gateway:
-    image: otel/opentelemetry-collector-contrib:latest
-    container_name: otel-gateway
-
-    command:
-      - "--config=/etc/otel/config.yaml"
-
-    volumes:
-      - ./config.yaml:/etc/otel/config.yaml
-
-    ports:
-      - "4317:4317"
-      - "4318:4318"
-
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-
-    restart: always
-```
-
-## 🚀 Subir o Gateway
-
-Dentro da pasta `otel-gateway`:
-
-```bash
-docker compose up -d
-```
-
-Validar logs:
+### Logs do Gateway (ver métricas chegando)
 
 ```bash
 docker logs -f otel-gateway
 ```
 
-Você deve observar algo semelhante a:
+Saída esperada:
 
-```text
-Starting GRPC server
-Starting HTTP server
-Everything is ready. Begin running and processing data.
 ```
-
----
-
-# 📡 3. OTel Agent (Simulando VPS)
-
-O Agent coleta métricas locais e envia explicitamente utilizando gRPC.
-
-## 📄 `otel-agent/config.yaml`
-
-```yaml
-receivers:
-  hostmetrics:
-    collection_interval: 10s
-
-    scrapers:
-      cpu:
-      memory:
-      load:
-      filesystem:
-      network:
-
-processors:
-  batch:
-
-exporters:
-  otlp_grpc:
-    endpoint: "host.docker.internal:4317"
-
-    tls:
-      insecure: true
-
-service:
-  pipelines:
-    metrics:
-      receivers: [hostmetrics]
-      processors: [batch]
-      exporters: [otlp_grpc]
-```
-
-## 🐳 `otel-agent/docker-compose.yml`
-
-```yaml
-services:
-  agent:
-    image: otel/opentelemetry-collector-contrib:latest
-    container_name: otel-agent
-
-    command:
-      - "--config=/etc/otel/config.yaml"
-
-    volumes:
-      - ./config.yaml:/etc/otel/config.yaml
-
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-
-    restart: always
-```
-
-## 🚀 Subir o Agent
-
-Dentro da pasta `otel-agent`:
-
-```bash
-docker compose up -d
-```
-
----
-
-# 🔌 Comunicação entre os Containers
-
-Fluxo de comunicação:
-
-```text
-Agent
-  ↓ OTLP gRPC (4317)
-Gateway
-  ↓ Native TCP (9000)
-ClickHouse
-```
-
-Estratégia utilizada:
-
-* Agent → `host.docker.internal:4317`
-* Gateway escuta em `0.0.0.0:4317`
-* Gateway → `host.docker.internal:9000`
-
----
-
-# 🧪 4. Validação da POC
-
-## 📊 Verificar logs do Gateway
-
-```bash
-docker logs -f otel-gateway
-```
-
-Se tudo estiver correto, o exporter `debug` exibirá métricas recebidas.
-
-Exemplo:
-
-```text
-ResourceMetrics
 Metric Name: system.cpu.time
 Metric Name: system.memory.usage
 Metric Name: system.network.io
+...
 ```
 
----
-
-## 📊 Verificar logs do Agent
+### Logs do Agent (sem erros)
 
 ```bash
-docker logs -f otel-agent
+docker logs otel-agent
 ```
 
-O log deve permanecer limpo.
+Não deve conter `connection refused` ou `Exporting failed`.
 
-Não devem aparecer mensagens como:
-
-```text
-connection refused
-```
-
-ou
-
-```text
-Exporting failed
-```
-
----
-
-# 💻 5. Consultar Dados no ClickHouse
-
-Acesse o cliente SQL do ClickHouse:
+## Consultar métricas no ClickHouse
 
 ```bash
 docker exec -it clickhouse-server clickhouse-client \
-  --user default \
-  --password password123 \
-  --database otel
+  --user default --password password123 --database otel
 ```
 
----
-
-## Query A — Verificar tabelas criadas automaticamente
+### Ver tabelas
 
 ```sql
 SHOW TABLES;
 ```
 
-Resultado esperado:
-
-```text
-otel_metrics_gauge
-otel_metrics_sum
-otel_logs
-otel_traces
-```
-
-(Dependendo da versão do exporter, algumas tabelas podem variar.)
-
----
-
-## Query B — Validar recebimento de métricas
-
-Execute a consulta abaixo duas ou três vezes com alguns segundos de intervalo.
-
-Os totais devem aumentar continuamente.
+### Todas as métricas disponíveis
 
 ```sql
-SELECT 'Gauge' AS tipo, MetricName, COUNT(*) AS total FROM otel_metrics_gauge GROUP BY MetricName
-UNION ALL
-SELECT 'Sum' AS tipo, MetricName, COUNT(*) AS total FROM otel_metrics_sum GROUP BY MetricName;
+SELECT DISTINCT MetricName FROM otel_metrics_gauge ORDER BY MetricName;
 ```
 
----
+### Últimas métricas de CPU
+
+```sql
+SELECT TimeUnix, MetricName, Value
+FROM otel_metrics_gauge
+WHERE MetricName LIKE '%cpu%'
+ORDER BY TimeUnix DESC LIMIT 20;
+```
+
+### Últimas métricas de GPU (se habilitado)
+
+```sql
+SELECT TimeUnix, MetricName, Value, Attributes
+FROM otel_metrics_gauge
+WHERE MetricName LIKE '%DCGM%' OR MetricName LIKE '%gpu%'
+ORDER BY TimeUnix DESC LIMIT 20;
+```
+
+### Totais por métrica (aumentam com o tempo)
+
+```sql
+SELECT MetricName, COUNT(*) AS total
+FROM otel_metrics_gauge
+GROUP BY MetricName
+ORDER BY total DESC;
+```
+
+## GPU NVIDIA (opcional)
+
+Usa o [DCGM Exporter](https://github.com/NVIDIA/dcgm-exporter) da NVIDIA para
+expor métricas de GPU, e o Agent faz o scrapping via receiver `prometheus`.
+
+### Pré-requisito
+
+Instale o [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+e configure o `runtime: nvidia` como padrão do Docker.
+
+### Ativar
+
+O DCGM Exporter já está definido no `docker-compose.yaml` do Agent com
+`runtime: nvidia`. Basta recriar o Agent:
+
+```bash
+cd otel-agent && docker compose down && docker compose up -d
+```
+
+## Parar tudo
+
+```bash
+cd otel-agent    && docker compose down
+cd otel-gateway  && docker compose down
+cd clickhouse    && docker compose down
+```
